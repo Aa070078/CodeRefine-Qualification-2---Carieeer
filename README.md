@@ -171,7 +171,7 @@ Rejected is a terminal outcome that can be selected from Applied, Screened or In
 
 ## 6. Deep dives and estimates
 
-[DEEP_DIVES.md](DEEP_DIVES.md) explains duplicate prevention, search consistency, matching, notifications and scaling. [docs/supabase.md](docs/supabase.md) explains the Supabase-specific Auth, RLS and Storage setup.
+[DEEP_DIVES.md](DEEP_DIVES.md) has short notes about the main design decisions. [docs/supabase.md](docs/supabase.md) explains the Supabase-specific Auth, RLS and Storage setup.
 
 [ESTIMATION.md](ESTIMATION.md) contains a small capacity estimate. The main trade-off is keeping applications correct immediately while allowing search, matching and notifications to update shortly afterward.
 
