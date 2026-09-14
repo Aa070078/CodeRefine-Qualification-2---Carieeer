@@ -1,152 +1,195 @@
-# Carieeer — CodeRefine Qualification 2
+# Carieeer — System Design
 
-Carieeer connects candidates with suitable jobs and helps them work toward their next role. This submission designs the system around one essential promise: an application is recorded once, moves through a controlled pipeline, and remains correct even when search, matching, or notification services are unavailable.
+Carieeer helps candidates find suitable jobs and see which skills they need for their next role. Employers can post jobs, find candidates and manage applications.
 
-**Design submission, not a deployed product.** The repository contains contracts, consistency algorithms, capacity calculations, editable Excalidraw diagrams, and reproducible diagram/structural checks. Performance figures are proposed targets, not benchmark results.
+This repository contains the system design. It does not include an application implementation.
 
-## Overview and goals / scope
+## 1. Requirements
 
-Candidates maintain profiles, discover jobs, apply, receive recommendations, and follow skill roadmaps. Employers manage company jobs, discover consenting candidates, and progress applications. Matching and skill analysis are external domain capabilities with defined interfaces; their algorithms are outside scope.
+### Functional requirements
 
-The backend is a **modular monolith plus independently scaled background workers**. PostgreSQL owns business truth. OpenSearch owns derived discovery documents. RabbitMQ decouples background work. Redis accelerates disposable reads. Private object storage holds uploaded files.
+- Candidates can manage skills, experience, education, career goals and portfolio.
+- Employers can manage company information and create, edit or close job postings.
+- Candidates can search jobs by keywords, skills and salary. Employers can search candidates by skills and experience.
+- A matching engine recommends jobs to candidates and candidates to employers.
+- Candidates can apply once per job and follow their application status.
+- Employers can move applications through Applied, Screened, Interview, Offer and Rejected.
+- Candidates can see missing skills for a target role and track roadmap milestones.
+- Users receive notifications for matches, application changes and completed milestones.
 
-## Assumptions
+### Non-functional requirements
 
-- One home region with three availability zones; no active-active writes across regions.
-- Planning envelope: 1 million candidates, 20,000 employer users, 10,000 companies, 100,000 live jobs, 100,000 DAU. See [calculations](ESTIMATION.md).
-- An employer is a company membership, not a separate login. A user may have both a candidate profile and employer memberships.
-- One application per candidate/job for the job's lifetime. Rejection does not permit reapplication; employers create a new job for a new requisition.
-- `Offer` and `Rejected` are terminal in this scope. Offer acceptance, hiring, withdrawal, scheduling, billing, chat, and an LMS are excluded.
-- Candidate discovery requires explicit consent. Applicants share an immutable, minimal application snapshot with the hiring company.
-
-## Functional requirements
-
-| Capability | Required behavior |
+| Requirement | Target or decision |
 |---|---|
-| Identity and profiles | Sign in; edit skills, experience, education, goals, portfolio, and visibility |
-| Employers and jobs | Company roles, draft/publish/update/close jobs, structured requirements and compensation |
-| Discovery | Keyword, skills, experience, location, work mode, and pay filters; consenting candidate expertise search; saved jobs |
-| Matching | Persist ranked recommendations from a black-box engine; expose freshness and refresh status |
-| Applications | Exactly one record per candidate/job; retry-safe submit; candidate tracking and employer pipeline |
-| Pipeline | `Applied → Screened → Interview → Offer`; rejection from Applied, Screened, or Interview |
-| Career growth | Target-role skill gaps, priorities, roadmaps, milestones, and recomputation |
-| Notifications | In-app and optional email/push for matches, status changes, and milestones, honoring preferences |
+| Availability | Aim for 99.9% availability for the main API. Matching or notification failure should not stop applications. |
+| Performance | Aim for most profile reads under 300 ms and searches under 500 ms. These are targets, not tested results. |
+| Scalability | Start with one backend, then add backend instances and workers as traffic grows. |
+| Consistency | Applications must not be duplicated. Search and matching results may take a short time to update. |
+| Durability | Keep database backups and use a standby database for recovery. |
+| Security | Use authentication, owner/company permission checks, HTTPS and private resume storage. |
+| Reliability | Retry temporary background failures and keep failed tasks for investigation. |
+| Maintainability | Keep features in separate backend modules. Log errors and monitor API latency and queue size. |
 
-[Detailed requirements and acceptance criteria](docs/requirements.md) · [Requirements diagram](diagrams/requirements.excalidraw)
+![Requirements](diagrams/exports/requirements.png)
 
-## Non-functional requirements
+## 2. Data model
 
-| Target | Carieeer-specific commitment |
+Use **PostgreSQL** because jobs, users and applications have clear relationships, and applications need transactions and unique constraints.
+
+| Entity | Main fields |
 |---|---|
-| Availability | 99.9% monthly core API success; derived-service failures must not block application submission |
-| Performance | p95 profile/detail reads <200 ms, application/status writes <300 ms, search <500 ms server-side |
-| Scalability | Design for roughly 930 peak public API requests/s and 100 peak candidate-ranking tasks/s |
-| Consistency | Strong application uniqueness and transitions; search p95 freshness ≤60 s, matches p95 ≤15 min under normal load |
-| Durability | RPO 0 for acknowledged writes under a single-AZ failure; regional disaster RPO ≤5 min, RTO ≤60 min |
-| Security/privacy | Per-company authorization, candidate visibility checks, private files, audited hiring changes |
-| Reliability | Transactional outbox, at-least-once work, bounded retries, reconciliation, and failure isolation |
-| Observability | API SLO burn, queue age, projection lag, matching staleness, delivery outcomes, and correlation IDs |
-| Maintainability | Domain-owned tables/contracts, one migration pipeline, backward-compatible events, no cross-module ad hoc writes |
+| User | id, name, email, password_hash, account_type |
+| CandidateProfile | user_id, bio, experience, education, career_goal, portfolio, searchable, revision |
+| Company | id, name, description, website |
+| Employer | user_id, company_id, role |
+| Skill | id, name |
+| CandidateSkill | candidate_id, skill_id, level |
+| Job | id, company_id, title, description, salary_min, salary_max, currency, eligibility, status, revision |
+| JobSkill | job_id, skill_id, required_level |
+| Application | id, candidate_id, job_id, resume_file_id, status, version, created_at |
+| ApplicationStatusHistory | id, application_id, old_status, new_status, changed_by, changed_at |
+| Match | candidate_id, job_id, score, candidate_revision, job_revision, computed_at |
+| TargetRole | id, title, required_skills |
+| SkillGap | id, candidate_id, target_role_id, missing_skills, computed_at |
+| Roadmap | id, candidate_id, skill_gap_id, milestones |
+| Notification | id, user_id, event_id, message, is_read, delivery_status |
+| NotificationPreference | user_id, push_enabled, matches_enabled |
 
-Targets, error budgets, measurement boundaries, and degradation behavior are defined in [requirements](docs/requirements.md).
+Important relationships:
 
-## Data model
+- One candidate profile belongs to one user. An employer links a user to a company.
+- A company has many jobs. Candidates and jobs each have many skills through join tables.
+- A candidate has many applications; a job receives many applications.
+- Each application has a history of status changes.
+- Matches connect candidates and jobs. Skill gaps connect candidates and target roles.
 
-PostgreSQL holds normalized profiles, employer memberships, jobs, applications and append-only history. Versioned recommendation sets and skill analyses are persisted but remain recomputable. Constraints protect invariants; cache locks are never the uniqueness mechanism.
+Add a unique constraint on **Application(candidate_id, job_id)**. Also keep one Match row per candidate/job pair. Experience, education and milestones can use structured JSON initially; separate tables would make sense if querying individual entries becomes important.
 
-![Data model](diagrams/exports/data-model.svg)
+Small supporting records keep file ownership/scan status, pending events and request retry keys. These are explained in the deep dives rather than drawing a full database schema.
 
-[Entity catalog, cardinality and indexes](docs/data-model.md) · [Executable core SQL](docs/schema-core.sql)
+![Data model](diagrams/exports/data-model.png)
 
-## API design
+## 3. API design
 
-REST under `/v1`; OIDC login; scoped authorization; cursor pagination; `Idempotency-Key` on retryable commands; `If-Match` on updates. The apply transaction binds caller identity to candidate identity and checks authoritative job state. Invalid transitions and stale versions are explicit errors.
+Paths below start with `/api`. The examples show the main fields, not every optional field. The server identifies the user from authentication; a candidate cannot submit on someone else's behalf.
 
-[Endpoint requests, responses and errors](docs/api-design.md) · [API diagram](diagrams/api-design.excalidraw)
+| Method and endpoint | Request | Response |
+|---|---|---|
+| POST /auth/register | {name, email, password, account_type} | {user_id} |
+| POST /auth/login | {email, password} | {access_token} |
+| PUT /me/profile | {bio, skills, experience, education, career_goal, portfolio, searchable} | {profile} |
+| POST /me/files | Multipart resume or portfolio file | {file_id, status} |
+| POST /companies | {name, description, website} | {company_id} |
+| PUT /companies/:id | {name, description, website} | {company} |
+| POST /companies/:id/jobs | {title, description, skills, salary_min, salary_max, currency, eligibility} | {job_id, status} |
+| PATCH /jobs/:id | {description?, skills?, status?} | {job} |
+| GET /jobs | Query: q, skills, salary_min, salary_max, currency, page | {jobs, next_page} |
+| GET /candidates | Query: skills, min_experience, page | {candidates, next_page} |
+| GET /me/matches | None | {jobs: [{job_id, score}], computed_at} |
+| GET /jobs/:id/matches | None | {candidates: [{candidate_id, score}]} |
+| POST /jobs/:id/applications | {resume_file_id}; Idempotency-Key header | {application_id, status} |
+| GET /me/applications | Query: page | {applications, next_page} |
+| GET /jobs/:id/applications | Query: status, page | {applications, next_page} |
+| PATCH /applications/:id/status | {status, expected_version} | {application_id, status, version} |
+| POST /me/skill-gaps | {target_role_id} | {skill_gap_id, matched_skills, missing_skills} |
+| POST /me/roadmaps | {skill_gap_id} | {roadmap_id, milestones} |
+| PATCH /me/roadmaps/:id/milestones/:milestone_id | {completed: true} | {milestone} |
+| GET /me/notifications | Query: page | {notifications, next_page} |
+| PATCH /me/notifications/:id | {is_read: true} | {notification} |
+| PUT /me/notification-preferences | {push_enabled, matches_enabled} | {preferences} |
 
-## High-level architecture
+Return 201 for created resources, 200 for successful reads/updates, 400 for invalid input, 401 for missing authentication and 403 for denied access. Return 409 for an existing application or a conflicting status version. Lists have a maximum of 50 items per page.
 
-![High-level architecture](diagrams/exports/architecture.svg)
+Company changes require a company admin. Job management and applicant lists require membership in that job's company. Candidate discovery only returns profiles that allow it. Salary filters compare the same currency and annual pay period.
 
-Keep identity/access, talent profiles, employers/jobs, applications, discovery/matching, career growth, and notification preferences as modules in one backend deployment. Move expensive and unreliable work to worker pools. This preserves local transactions without requiring a distributed transaction for an application.
+Jobs move from Draft to Open to Closed; only Open jobs accept applications. A file must belong to the candidate and pass scanning before it can be attached to an application.
 
-[Boundaries, deployment and ownership](docs/architecture.md)
+For example:
 
-## Critical flows
+```http
+PATCH /api/applications/a1/status
+Authorization: Bearer <token>
+Content-Type: application/json
 
-![Critical flows](diagrams/exports/flows.svg)
+{"status":"Screened","expected_version":1}
+```
 
-Publication commits the job and outbox event together. Independent indexing and matching subscriptions consume the event; matching never waits for the search projection to catch up. Applying commits the application, initial history, idempotency response, and outbox event together. Notification delivery happens later.
+```json
+{"application_id":"a1","status":"Screened","version":2}
+```
 
-[Flow algorithms, race cases and matching contracts](docs/flows.md)
+![API design](diagrams/exports/api-design.png)
 
-## Deep dives
+## 4. High-level architecture
 
-The most important decisions are defended in [DEEP_DIVES.md](DEEP_DIVES.md): relational storage and indexes, read scaling, cache failure, search rebuilds, broker semantics, matching generations, application races, idempotency, notifications, backpressure, recovery, observability, and privacy. Each discussion covers the problem, scale concern, design, technology, consistency, failure modes, trade-offs, and rationale.
+Start with a **modular monolith**: one backend deployment with separate modules for profiles, jobs, applications, matching, career growth and notifications. This is easier to build and maintain than many separate services.
 
-## Scalability
+![Architecture](diagrams/exports/architecture.png)
 
-Start with a managed HA PostgreSQL cluster, a small API fleet across zones, bounded worker pools, and managed search/broker infrastructure. Scale API replicas by CPU and latency; workers by oldest eligible task age and dependency quotas. Add read replicas only for stale-tolerant reads. Do not shard at this envelope. [Estimates](ESTIMATION.md) identify measurements that would justify the next step.
+- **Backend API:** authenticates requests and calls the relevant module.
+- **PostgreSQL:** main source of truth for users, jobs and applications.
+- **OpenSearch:** keyword search and filters. Its data is copied from PostgreSQL.
+- **RabbitMQ and workers:** process matching, indexing and notifications in the background.
+- **Object storage:** stores resume and portfolio files. PostgreSQL stores their references.
+- **Redis, later if needed:** cache frequently read job details. It is not needed for application correctness.
 
-## Reliability / failure handling
+The boxes inside the backend describe code modules, not separate servers. Matching and notification modules put expensive work on the queue. Workers read the required data and save results back to the database.
 
-Search failures return a retryable discovery error; saved jobs and known job details remain available. Matching outages preserve eligible older recommendations with a stale label. Broker outages accumulate durable outbox entries. Notification outages leave application commits unaffected. Database unavailability rejects writes; never acknowledge an application buffered only in memory. See [recovery decisions](DEEP_DIVES.md#15-failure-recovery).
+## 5. Main flows
 
-## Security
+### Publishing a job
 
-OIDC authentication, server-side role checks, mandatory company scope, candidate consent, private signed file URLs, malware scanning, TLS, encryption at rest, quotas, and redacted audits protect hiring data. A revoked profile is filtered on authoritative reads even while index removal is pending. [Security design](DEEP_DIVES.md#17-security-and-privacy)
+Employer creates a job → backend saves it → background event is queued.
 
-## Back-of-the-envelope estimation
+An indexing worker updates OpenSearch. A matching worker passes job/candidate data to the black-box engine, saves returned scores, and schedules notifications for relevant new matches.
 
-At the planning envelope: 8 million public API requests/day ≈93 average QPS and 930 peak QPS; 50,000 applications/day; 500,000 ranking tasks/day; 600,000 logical notifications/day. Hot relational storage is approximately 241 GB including a simple index/bloat allowance; provision ~500 GB usable for headroom. [Full calculations and sensitivity](ESTIMATION.md)
+### Applying for a job
 
-## Trade-offs
+Candidate applies → backend checks the job is open → database inserts the application and initial history → API returns success → notification is processed later.
 
-- A modular monolith reduces coordination and operational cost but requires enforced module ownership.
-- PostgreSQL transactions simplify hiring correctness; a single writer imposes a measured scaling boundary.
-- Eventual search/match freshness keeps writes fast but needs user-visible timestamps and repair jobs.
-- RabbitMQ fits work queues and fan-out at this volume; long-term replay comes from retained outbox data and database rebuilds, not a broker log.
-- Bounded matching shortlists control cost but may miss candidates. Measure coverage and rotate exploration; never claim exhaustive matching.
-- External email can occasionally duplicate after an ambiguous provider response. Exactly-once user-visible delivery is not promised.
+The unique candidate/job constraint prevents two requests from creating two applications. The job-open check and insert happen in a transaction. See [Deep Dives](DEEP_DIVES.md) for the close-job race and retries.
 
-## Repository structure
+### Application states
+
+| Current state | Allowed next state |
+|---|---|
+| Applied | Screened or Rejected |
+| Screened | Interview or Rejected |
+| Interview | Offer or Rejected |
+| Offer | Rejected |
+| Rejected | None |
+
+Following the task's listed pipeline, an offer can still end in Rejected. There is no separate Accepted/Hired state in this design. Backward moves and skipped stages are rejected.
+
+![Flows](diagrams/exports/flows.png)
+
+## 6. Deep dives and estimates
+
+[DEEP_DIVES.md](DEEP_DIVES.md) explains duplicate prevention, search consistency, matching, notifications and scaling.
+
+[ESTIMATION.md](ESTIMATION.md) contains a small capacity estimate. The main trade-off is keeping applications correct immediately while allowing search, matching and notifications to update shortly afterward.
+
+## Files and diagrams
 
 ```text
 README.md
 DEEP_DIVES.md
 ESTIMATION.md
-docs/
-  requirements.md
-  data-model.md
-  schema-core.sql
-  api-design.md
-  architecture.md
-  flows.md
-  judge-audit.md
-  sources.md
 diagrams/
-  {requirements,data-model,api-design,architecture,flows}.excalidraw
-  exports/                    # SVG and PNG previews
-  mcp/                        # exact MCP input scenes and checkpoint receipts
-scripts/
-  build-diagrams.mjs
-  validate.mjs
-  export-png.mjs
-  test-schema.mjs
-package.json
-package-lock.json
+  requirements.excalidraw
+  data-model.excalidraw
+  api-design.excalidraw
+  architecture.excalidraw
+  flows.excalidraw
+  exports/                  # PNG and SVG previews
 ```
 
-## Diagram index
-
-| Diagram | Editable | Preview |
+| Diagram | Editable file | Vector preview |
 |---|---|---|
-| Requirements | [Excalidraw](diagrams/requirements.excalidraw) | [SVG](diagrams/exports/requirements.svg) · [PNG](diagrams/exports/requirements.png) |
-| Data model | [Excalidraw](diagrams/data-model.excalidraw) | [SVG](diagrams/exports/data-model.svg) · [PNG](diagrams/exports/data-model.png) |
-| API design | [Excalidraw](diagrams/api-design.excalidraw) | [SVG](diagrams/exports/api-design.svg) · [PNG](diagrams/exports/api-design.png) |
-| Architecture | [Excalidraw](diagrams/architecture.excalidraw) | [SVG](diagrams/exports/architecture.svg) · [PNG](diagrams/exports/architecture.png) |
-| Flows | [Excalidraw](diagrams/flows.excalidraw) | [SVG](diagrams/exports/flows.svg) · [PNG](diagrams/exports/flows.png) |
+| Requirements | [Excalidraw](diagrams/requirements.excalidraw) | [SVG](diagrams/exports/requirements.svg) |
+| Data model | [Excalidraw](diagrams/data-model.excalidraw) | [SVG](diagrams/exports/data-model.svg) |
+| API design | [Excalidraw](diagrams/api-design.excalidraw) | [SVG](diagrams/exports/api-design.svg) |
+| Architecture | [Excalidraw](diagrams/architecture.excalidraw) | [SVG](diagrams/exports/architecture.svg) |
+| Main flows | [Excalidraw](diagrams/flows.excalidraw) | [SVG](diagrams/exports/flows.svg) |
 
-All five scenes were created using the installed Excalidraw MCP. Standard editable files and deterministic SVG previews use the same scene definitions; PNGs are rasterized from those SVGs. The MCP provides interactive rendering/checkpoints, not a native file-export API. See [judge audit](docs/judge-audit.md) for validation evidence and limitations and [technical references](docs/sources.md) for mechanism documentation.
-
-To reproduce: `npm ci --ignore-scripts`, then `npm run diagrams`, `npm run validate`, and `npm run test:sql`. Node.js 20+ is recommended. The SQL checks use embedded PostgreSQL (PGlite) to exercise the consistency kernel; they do not implement a full backend or replace multi-session concurrency/load tests. The generator recreates the original scene files, so save manual Excalidraw edits separately before regenerating.
+The diagrams were created with Excalidraw MCP. The editable files and PNG/SVG previews use the same scene content; the previews use plain vector styling.
