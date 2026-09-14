@@ -1,6 +1,6 @@
 # Carieeer
 
-Simple career website design for the competition.
+career website design.
 
 ## What it does
 
