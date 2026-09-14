@@ -54,11 +54,32 @@ Client -> Backend API -> Supabase Auth / Database / Storage; workers use RabbitM
 
 ## Diagrams (main explanation)
 
-- [Requirements](diagrams/requirements.excalidraw)
-- [Data model](diagrams/data-model.excalidraw)
-- [API](diagrams/api-design.excalidraw)
-- [Architecture](diagrams/architecture.excalidraw)
-- [Flows](diagrams/flows.excalidraw)
+The PNG files below appear directly on GitHub. The editable Excalidraw files are linked too.
+
+### Requirements
+
+![Requirements](diagrams/exports/requirements.png)
+[Open editable file](diagrams/requirements.excalidraw)
+
+### Data model
+
+![Data model](diagrams/exports/data-model.png)
+[Open editable file](diagrams/data-model.excalidraw)
+
+### API
+
+![API](diagrams/exports/api-design.png)
+[Open editable file](diagrams/api-design.excalidraw)
+
+### Architecture
+
+![Architecture](diagrams/exports/architecture.png)
+[Open editable file](diagrams/architecture.excalidraw)
+
+### Flows
+
+![Flows](diagrams/exports/flows.png)
+[Open editable file](diagrams/flows.excalidraw)
 
 ## Notes
 
