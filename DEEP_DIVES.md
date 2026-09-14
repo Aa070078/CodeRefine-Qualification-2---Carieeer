@@ -1,14 +1,30 @@
-# Deep Dives (short version)
+# Simple Deep Dives
 
-These are the main decisions behind the design:
+## Supabase database
 
-1. **Supabase Database:** stores the real data. It is good for relationships between users, jobs and applications.
-2. **Duplicate applications:** add `UNIQUE(candidate_id, job_id)` and use a transaction. This is safer than checking first in application code.
-3. **Status updates:** store a version and allow only the states shown in the README. Save a status history row for every change.
-4. **Search:** use OpenSearch for keywords and filters. It copies data from Supabase, so a new job may appear a little later.
-5. **Matching:** treat the matching engine as a black box and run it in a worker. Save its scores in the database instead of calling it on every page load.
-6. **Notifications:** put notification work on RabbitMQ. A failed push should not cancel an application.
-7. **Scaling:** start with one backend split into modules. Add more backend instances or workers only when traffic grows.
-8. **Security:** use Supabase Auth, Row Level Security, company membership checks and private Supabase Storage files.
+PostgreSQL keeps applications and status changes together because these records must agree. Normal indexes cover user IDs, job status, skills, and application lookups. Read replicas can be added later for busy public pages.
 
-The main trade-off is simple: applications need an immediate correct database result, while search, matching and notifications can finish shortly afterward.
+## Duplicate applications
+
+The problem is two clicks or two servers applying at the same time. A unique `(candidate_id, job_id)` constraint is the final protection. A transaction and `Idempotency-Key` make retries safe. The trade-off is that a candidate gets one application per job.
+
+## Application states
+
+The API has a small transition table. It checks `expected_version`, updates the row, and appends history in one transaction. This stops two employer tabs from silently overwriting each other.
+
+## Search
+
+OpenSearch makes keyword and filter queries fast. It is only a copy: `JobUpdated` is retried by an indexing worker and a full reindex can rebuild it from PostgreSQL. A recently changed job may take a few seconds to appear.
+
+## Matching
+
+The matcher is a black box. A worker sends candidate/job skills, experience, and eligibility, then stores returned scores. Events trigger recomputation; cached results have a time-to-live. Retries use a job ID so the same result can be written safely. The API can return a stale result with its timestamp while a new one is being calculated.
+
+## Notifications
+
+Application and match events go to RabbitMQ. A notification worker checks preferences and calls email or push providers. It retries temporary errors, deduplicates by event ID, and sends permanent failures to a dead-letter queue. The user request never waits for email.
+
+## Security and recovery
+
+Supabase Auth provides login, RLS limits rows by user/company, and server code checks employer permissions. Files use a private bucket and short-lived URLs. HTTPS, validation, rate limits, audit logs, metrics, alerts, and database backups cover common failures. Workers can be restarted and replay events from the queue or an outbox table.
+
