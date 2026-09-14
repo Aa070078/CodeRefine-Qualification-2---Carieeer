@@ -25,7 +25,7 @@ This repository contains the system design. It does not include an application i
 | Performance | Aim for most profile reads under 300 ms and searches under 500 ms. These are targets, not tested results. |
 | Scalability | Start with one backend, then add backend instances and workers as traffic grows. |
 | Consistency | Applications must not be duplicated. Search and matching results may take a short time to update. |
-| Durability | Keep database backups and use a standby database for recovery. |
+| Durability | Configure Supabase database backups and test recovery. Back up stored files separately. |
 | Security | Use authentication, owner/company permission checks, HTTPS and private resume storage. |
 | Reliability | Retry temporary background failures and keep failed tasks for investigation. |
 | Maintainability | Keep features in separate backend modules. Log errors and monitor API latency and queue size. |
@@ -34,11 +34,11 @@ This repository contains the system design. It does not include an application i
 
 ## 2. Data model
 
-Use **PostgreSQL** because jobs, users and applications have clear relationships, and applications need transactions and unique constraints.
+Use **Supabase** for this project. Supabase gives us a managed PostgreSQL database, Auth, and Storage in one place. PostgreSQL is useful here because jobs, users and applications have clear relationships, and applications need transactions and unique constraints.
 
 | Entity | Main fields |
 |---|---|
-| User | id, name, email, password_hash, account_type |
+| User | id (references auth.users.id), name, account_type |
 | CandidateProfile | user_id, bio, experience, education, career_goal, portfolio, searchable, revision |
 | Company | id, name, description, website |
 | Employer | user_id, company_id, role |
@@ -57,6 +57,7 @@ Use **PostgreSQL** because jobs, users and applications have clear relationships
 
 Important relationships:
 
+- Supabase Auth owns login credentials and email. The application User table stores profile information; it does not store passwords.
 - One candidate profile belongs to one user. An employer links a user to a company.
 - A company has many jobs. Candidates and jobs each have many skills through join tables.
 - A candidate has many applications; a job receives many applications.
@@ -73,9 +74,11 @@ Small supporting records keep file ownership/scan status, pending events and req
 
 Paths below start with `/api`. The examples show the main fields, not every optional field. The server identifies the user from authentication; a candidate cannot submit on someone else's behalf.
 
+These are our backend routes, not Supabase's generated REST paths. Registration and login delegate to Supabase Auth. The backend verifies the Supabase access token before handling other routes. Registration may require email confirmation before a session is issued; users cannot grant themselves company-admin permissions through signup metadata.
+
 | Method and endpoint | Request | Response |
 |---|---|---|
-| POST /auth/register | {name, email, password, account_type} | {user_id} |
+| POST /auth/register | {name, email, password, account_type} | {user_id, confirmation_required} |
 | POST /auth/login | {email, password} | {access_token} |
 | PUT /me/profile | {bio, skills, experience, education, career_goal, portfolio, searchable} | {profile} |
 | POST /me/files | Multipart resume or portfolio file | {file_id, status} |
@@ -126,14 +129,17 @@ Start with a **modular monolith**: one backend deployment with separate modules 
 
 ![Architecture](diagrams/exports/architecture.png)
 
-- **Backend API:** authenticates requests and calls the relevant module.
-- **PostgreSQL:** main source of truth for users, jobs and applications.
+- **Backend API:** verifies Supabase tokens, checks permissions and calls the relevant module.
+- **Supabase Auth:** handles signup, login and sessions.
+- **Supabase Database:** managed PostgreSQL, the main source of truth for profiles, jobs and applications.
 - **OpenSearch:** keyword search and filters. Its data is copied from PostgreSQL.
 - **RabbitMQ and workers:** process matching, indexing and notifications in the background.
-- **Object storage:** stores resume and portfolio files. PostgreSQL stores their references.
+- **Supabase Storage:** private buckets for resume and portfolio files. PostgreSQL stores their references and scan status.
 - **Redis, later if needed:** cache frequently read job details. It is not needed for application correctness.
 
 The boxes inside the backend describe code modules, not separate servers. Matching and notification modules put expensive work on the queue. Workers read the required data and save results back to the database.
+
+Application changes still go through the backend and a database transaction. Supabase does not replace the matching engine, dedicated search or background workers in this design. Keep business-write tables inaccessible to browser database calls; use Row Level Security (RLS) for any client-accessible tables and Storage policies for private files.
 
 ## 5. Main flows
 
@@ -156,16 +162,16 @@ The unique candidate/job constraint prevents two requests from creating two appl
 | Applied | Screened or Rejected |
 | Screened | Interview or Rejected |
 | Interview | Offer or Rejected |
-| Offer | Rejected |
+| Offer | None |
 | Rejected | None |
 
-Following the task's listed pipeline, an offer can still end in Rejected. There is no separate Accepted/Hired state in this design. Backward moves and skipped stages are rejected.
+Rejected is a terminal outcome that can be selected from Applied, Screened or Interview. Offer is also terminal in this design; there is no separate Accepted/Hired state. Backward moves and skipped stages are rejected.
 
 ![Flows](diagrams/exports/flows.png)
 
 ## 6. Deep dives and estimates
 
-[DEEP_DIVES.md](DEEP_DIVES.md) explains duplicate prevention, search consistency, matching, notifications and scaling.
+[DEEP_DIVES.md](DEEP_DIVES.md) explains duplicate prevention, search consistency, matching, notifications and scaling. [docs/supabase.md](docs/supabase.md) explains the Supabase-specific Auth, RLS and Storage setup.
 
 [ESTIMATION.md](ESTIMATION.md) contains a small capacity estimate. The main trade-off is keeping applications correct immediately while allowing search, matching and notifications to update shortly afterward.
 
@@ -193,3 +199,5 @@ diagrams/
 | Main flows | [Excalidraw](diagrams/flows.excalidraw) | [SVG](diagrams/exports/flows.svg) |
 
 The diagrams were created with Excalidraw MCP. The editable files and PNG/SVG previews use the same scene content; the previews use plain vector styling.
+
+Supabase references: [Database](https://supabase.com/docs/guides/database/overview), [Auth user data](https://supabase.com/docs/guides/auth/managing-user-data), [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security), [Storage access](https://supabase.com/docs/guides/storage/security/access-control).

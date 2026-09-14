@@ -33,8 +33,10 @@ Assume 5,000 application alerts + 5,000 status alerts + 10,000 match/milestone a
 - Open job data: 10,000 × 5 KB ≈ **50 MB**, excluding older closed jobs.
 - Applications: 5,000/day × 365 × 2 KB ≈ **3.65 GB/year**.
 - Two history rows per application on average: 1.825M × 2 × 200 B ≈ **730 MB/year**.
-- Resumes: 100,000 × 1 MB ≈ **100 GB** in object storage.
+- Resumes: 100,000 × 1 MB ≈ **100 GB** in Supabase Storage.
 - Match writes: 20,000 × 20 = up to 400,000 rows/day. Seven-day expiry caps retained rows at roughly 2.8M before upsert reuse; at 100 B/row that is about **280 MB** before indexes.
 - Notifications: 20,000/day × 90 days × 500 B ≈ **900 MB** with a 90-day retention window.
 
 These are rough data sizes. Indexes, backups, file replacements and replicas need additional space. The main early concerns are growing application history and the cost of matching, rather than average API traffic.
+
+Use these numbers when choosing Supabase database compute, Auth usage, Storage and egress allowances. They are workload estimates, not a claim that a free plan covers this deployment. OpenSearch, RabbitMQ and the matching engine have separate resource costs.

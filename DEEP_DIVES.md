@@ -2,7 +2,7 @@
 
 ## 1. Database and duplicate applications
 
-PostgreSQL fits the main data because users, companies, jobs and applications are related. A transaction lets the application and its status history succeed or fail together.
+Supabase Database provides PostgreSQL, which fits the main data because users, companies, jobs and applications are related. A transaction lets the application and its status history succeed or fail together. Use a server-side Postgres transaction on one pooled connection: several separate Supabase API calls would not make these writes atomic.
 
 Checking “does this application exist?” before inserting is not enough: two requests could both pass that check. Add a UNIQUE constraint on `(candidate_id, job_id)`. One request succeeds; the other gets 409 and the existing application ID.
 
@@ -10,11 +10,11 @@ For a lost response, the client retries with the same Idempotency-Key. Keep the 
 
 A job can also close while someone applies. The apply transaction takes a shared row lock on the job and checks it is open; closing the job takes a conflicting update lock. Whichever gets the lock first determines the order. Keep the transaction short and never wait for notifications inside it.
 
-Trade-off: database checks add some work, but a duplicate or wrongly accepted application is worse than a slightly slower submit.
+Trade-off: database checks add some work, but a duplicate or wrongly accepted application is worse than a slightly slower submit. Supabase reduces setup work, but database capacity and backup features still depend on the selected plan; it is not unlimited infrastructure.
 
 ## 2. Application status changes
 
-Only allow the transitions listed in the README. Store a version number on each application.
+Only allow the transitions listed in the README. Store a version number on each application. Rejected can happen from Applied, Screened or Interview; Offer and Rejected are terminal.
 
 If two recruiters both edit version 1, the update checks `WHERE version = 1`. One update creates version 2. The other changes no rows and returns 409, asking the client to refresh.
 
@@ -67,16 +67,18 @@ Start with one backend codebase and separate worker processes. Add API instances
 
 Add Redis only when repeated reads become a measured problem. Cache popular job details briefly, for example one minute. The cache may be stale, so it cannot decide whether an application is allowed. On cache failure, read from PostgreSQL with rate limits.
 
-A read replica can later handle public read traffic, but application writes and permission checks should use the primary database. Sharding is unnecessary at the starting scale.
+A read replica can later handle public read traffic if the selected Supabase setup supports it, but application writes and permission checks should use the primary database. Sharding is unnecessary at the starting scale.
 
-Keep backups and test restoring them. If PostgreSQL is unavailable, return an error rather than claiming an application succeeded. If matching or notifications fail, applications should still work. Monitor API errors, latency, slow queries and the oldest queued task; logs should help identify failed requests without containing resumes or passwords.
+Choose an appropriate Supabase backup/recovery option and test restoring it. Database backups do not restore the bytes in Storage buckets, so arrange separate file backups too. If Supabase Database is unavailable, return an error rather than claiming an application succeeded. If matching or notifications fail, applications should still work. Monitor API errors, latency, slow queries and the oldest queued task; logs should help identify failed requests without containing resumes or passwords.
 
 ## 7. Security
 
-Hash passwords using a maintained password-hashing library, use short-lived authentication tokens and serve requests over HTTPS.
+Use Supabase Auth for password handling and sessions instead of implementing password storage. The backend verifies token signature, issuer and expiry and uses the verified user ID. Serve requests over HTTPS.
 
 Candidates can edit only their own profile. Employers can change jobs and view applications only for their company. Candidate discovery is opt-in; applying shares the required candidate information with that job's employer.
 
-Store resume files privately, validate type/size and scan uploads before making them available. Use short-lived download links after checking access. Validate API input, limit login/application attempts and record employer status changes for auditing.
+Use private Supabase Storage buckets, validate file type/size and scan uploads before making them available. Scanning is our worker's responsibility, not an assumed Storage feature. Use short-lived signed download links after checking ownership or hiring-company access. Validate API input, limit login/application attempts and record employer status changes for auditing.
 
-These checks belong in the backend. Hiding a button in the interface is not authorization.
+Enable RLS for tables exposed through the Data API: for example, a candidate can access their own private profile and a user can read their own notifications. Storage policies restrict file access too. Keep application/status writes behind the backend, without direct browser write grants, so clients cannot bypass the transaction or state rules. Secret/service-role keys stay on the server; they can bypass RLS, so backend permission checks are still required. A public client key is not authorization by itself.
+
+Hiding a button in the interface is not authorization. Supabase supplies the tools, but we still have to write and test the access rules.
