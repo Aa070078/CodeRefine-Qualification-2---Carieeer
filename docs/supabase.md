@@ -1,4 +1,4 @@
-# Supabase choice
+# Supabase
 
 Supabase keeps the first version simple:
 
