@@ -1,0 +1,14 @@
+{
+  "name": "carieeer-design-submission",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "diagrams": "node scripts/build-diagrams.mjs && node scripts/export-png.mjs",
+    "validate": "node scripts/validate.mjs",
+    "test:sql": "node scripts/test-schema.mjs"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "@electric-sql/pglite": "0.3.14"
+  }
+}
